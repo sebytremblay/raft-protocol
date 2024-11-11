@@ -15,23 +15,28 @@ HEARTBEAT = 0.150
 APPENDFREQUENCY = 0.300
 
 # The possible states for a replica
+
+
 class ReplicaState(enum.Enum):
     FOLLOWER = 1
     CANDIDATE = 2
     LEADER = 3
-    
+
+
 class Replica:
     """
     This class represents a replica in the key-value store. It is responsible 
     for handling  all communication between replicas and clients.
     """
+
     def __init__(self, port, id, others):
         self.port = port
         self.id = id
         self.others = others
 
         # Track active replicas
-        self.replicas = {value: {"status": 0, "log_index": 0, "match_ind": 0} for index, value in enumerate(self.others)}
+        self.replicas = {value: {"status": 0, "log_index": 0, "match_ind": 0}
+                         for index, value in enumerate(self.others)}
         self.state = ReplicaState.FOLLOWER
         self.db = {}
         self.current_leader = BROADCAST
@@ -44,22 +49,22 @@ class Replica:
         # state variables
         self.term = 0
         self.voted_for = None
-        self.log = [{"command": None, "term": 0}] 
+        self.log = [{"command": None, "term": 0}]
         self.log_file = open(f"{self.id}.log", "w")
-        self.comm_ind = 0 
+        self.comm_ind = 0
         self.last_applied = 0
         self.next_ind = {}
         self.match_ind = {}
         self.last_hearbeat = time.time()
 
         self.socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        self.socket.bind(('localhost', 0))  
+        self.socket.bind(('localhost', 0))
         self.send_initial_hello()
 
     def send_initial_hello(self):
-        hello = {"src": self.id, 
-                 "dst": BROADCAST, 
-                 "leader": BROADCAST, 
+        hello = {"src": self.id,
+                 "dst": BROADCAST,
+                 "leader": BROADCAST,
                  "type": "hello"}
         self.send(hello)
 
@@ -81,7 +86,8 @@ class Replica:
         Args:
             message: The message to send.
         """
-        self.socket.sendto(json.dumps(message).encode('utf-8'), ('localhost', self.port))
+        self.socket.sendto(json.dumps(message).encode(
+            'utf-8'), ('localhost', self.port))
 
     def transition_state(self, state, message=None) -> None:
         """Transitions the replica to a new state.
@@ -96,8 +102,8 @@ class Replica:
         elif state == ReplicaState.CANDIDATE:
             self.make_candidate()
         elif state == ReplicaState.LEADER:
-           self.make_leader()
-            
+            self.make_leader()
+
     def make_follower(self, message) -> None:
         """Transitions the replica to a follower state.
 
@@ -107,38 +113,38 @@ class Replica:
         # Update state and restart election timeout
         self.state = ReplicaState.FOLLOWER
         self.generate_timeout()
-        
+
         # Update leader and term
         if message:
             self.current_leader = message["leader"]
             self.term = message["term"]
         else:
             self.current_leader = BROADCAST
-            
+
         # Reset votes
         self.voted_for = None
         self.votes.clear()
-    
+
     def make_candidate(self) -> None:
         """Transitions the replica to a candidate state."""
         # Update state and restart election timeout
         self.state = ReplicaState.CANDIDATE
         self.generate_timeout()
-        
+
         # Begin election
         self.current_leader = BROADCAST
         self.term += 1
-        
+
         # Vote for self
         self.voted_for = self.id
         self.votes = [self.id]
-    
+
     def make_leader(self) -> None:
         """Transitions the replica to a leader state."""
         # Elect self as leader
         self.state = ReplicaState.LEADER
         self.current_leader = self.id
-        
+
         # Inform other replicas of leadership
         for replica in self.others:
             self.next_ind[replica] = self.comm_ind + 1
@@ -152,14 +158,14 @@ class Replica:
 
     def request_vote(self) -> None:
         """Broadcasts a RequestVote RPC message to other replicas."""
-        vote_message = {"src": self.id, 
-                    "dst": BROADCAST, 
-                    "leader": BROADCAST, 
-                    "type": "requestvote", 
-                    "term": self.term,
-                    "last_log_index": len(self.log) - 1,
-                    "last_log_term": self.log[-1]["term"]}
-        self.send(vote_message)    
+        vote_message = {"src": self.id,
+                        "dst": BROADCAST,
+                        "leader": BROADCAST,
+                        "type": "requestvote",
+                        "term": self.term,
+                        "last_log_index": len(self.log) - 1,
+                        "last_log_term": self.log[-1]["term"]}
+        self.send(vote_message)
 
     def has_updated_logs(self, message) -> bool:
         """Checks if the sender's log is up to date with the replica's.
@@ -174,20 +180,20 @@ class Replica:
             return self.log[-1]["term"] <= message["last_log_term"]
         else:
             return len(self.log) - 1 <= message["last_log_index"]
-        
+
     def is_vote_valid(self, vote_request):
         """Evaluates whether a received vote request is valid based on current state."""
         if (vote_request["term"] < self.term or
             self.state != ReplicaState.FOLLOWER or
-            not self.has_updated_logs(vote_request)):
+                not self.has_updated_logs(vote_request)):
             return False
-        
+
         return self.voted_for is None or self.voted_for == vote_request["src"]
 
     def handle_vote_request(self, vote_request):
         """Processes a vote request."""
         self.generate_timeout()
-        
+
         if not self.is_vote_valid(vote_request):
             self.send_vote_response(vote_request["src"], False)
         else:
@@ -225,32 +231,32 @@ class Replica:
             replica: The replica to send the AppendEntries RPC to.
             heartbeat: Indicates whether the AppendEntries RPC is a heartbeat.
         """
-        # Only leader can send AppendEntries 
+        # Only leader can send AppendEntries
         previous_ind = self.next_ind[replica] - 1
         previous_term = self.log[previous_ind]["term"]
         entries = self.log[previous_ind + 1:]
-        
+
         # Split entries into chunks to prevent size limit
         entry_chunks = [entries[x:x + 30] for x in range(0, len(entries), 30)]
-        
+
         # Base message for AppendEntries
-        base_message = {"src": self.id, 
-                    "dst": replica, 
-                    "leader": self.id, 
-                    "type": "append", 
-                    "term": self.term,
-                    "prev_log_index": previous_ind, 
-                    "prev_log_term": previous_term, 
-                    "entries": [], 
-                    "leader_commit": self.comm_ind}
-        
+        base_message = {"src": self.id,
+                        "dst": replica,
+                        "leader": self.id,
+                        "type": "append",
+                        "term": self.term,
+                        "prev_log_index": previous_ind,
+                        "prev_log_term": previous_term,
+                        "entries": [],
+                        "leader_commit": self.comm_ind}
+
         # Send heartbeat
         if heartbeat:
             append_message = base_message.copy()
             append_message["entries"] = []
             self.send(append_message)
             return
-        
+
         # Send entries in chunks
         for chunk in entry_chunks:
             append_message = base_message.copy()
@@ -291,7 +297,7 @@ class Replica:
         Returns:
             int: The first index of a conflicting term in the log.
         """
-        if len(self.log) - 1 < index: 
+        if len(self.log) - 1 < index:
             return len(self.log) - 1
         else:
             term = self.log[index]["term"]
@@ -315,22 +321,22 @@ class Replica:
 
     def validate_append_request(self, message) -> bool:
         """Validate append request and reply with failure if necessary.
-        
+
         Args:
             message: The append message to validate."""
         fail = {
-            "src": self.id, 
-            "dst": message["src"], 
+            "src": self.id,
+            "dst": message["src"],
             "leader": self.current_leader,
-            "type": "fail", 
-            "term": self.term, 
+            "type": "fail",
+            "term": self.term,
             "first_index": self.is_conflicting_log_index(message["prev_log_index"])
         }
-        
+
         # Check term and log entry conditions
         if message["term"] < self.term or \
-        message["prev_log_index"] > len(self.log) - 1 or \
-        self.log[message["prev_log_index"]]["term"] != message["prev_log_term"]:
+                message["prev_log_index"] > len(self.log) - 1 or \
+                self.log[message["prev_log_index"]]["term"] != message["prev_log_term"]:
             self.send(fail)
             return False
         return True
@@ -343,14 +349,14 @@ class Replica:
 
     def process_log_entries(self, message):
         """Process and append new log entries from the append message.
-        
+
         Args:
             message: The append message to process."""
         # Handle conflicting entries
         next_ind = message["prev_log_index"] + 1
         if next_ind <= len(self.log) - 1:
             del self.log[next_ind:]
-            
+
         # Append new entries
         for entry in message["entries"]:
             self.log.append(entry)
@@ -358,36 +364,37 @@ class Replica:
         # Update commit index and send acknowledgment
         self.comm_ind = min(message["leader_commit"], len(self.log) - 1)
         ack_append = {
-            "src": self.id, 
-            "dst": message["src"], 
-            "leader": self.current_leader, 
-            "type": "ok", 
+            "src": self.id,
+            "dst": message["src"],
+            "leader": self.current_leader,
+            "type": "ok",
             "term": self.term,
-            "prev_log_index": message["prev_log_index"], 
-            "prev_log_term": message["prev_log_term"], 
+            "prev_log_index": message["prev_log_index"],
+            "prev_log_term": message["prev_log_term"],
             "entries": message["entries"]
         }
         self.send(ack_append)
 
     def handle_successful_append(self, message) -> None:
         """Handles successful append response from a follower.
-        
+
         Args:
             message: The successful append response message."""
         # Update match and next indexes
-        self.match_ind[message["src"]] = message["prev_log_index"] + len(message["entries"])
+        self.match_ind[message["src"]
+                       ] = message["prev_log_index"] + len(message["entries"])
         self.next_ind[message["src"]] = self.match_ind[message["src"]] + 1
-    
+
         # Calculate new commit index and attempt to commit entries
         ordered_matches = sorted(self.match_ind.values())
         new_comm_ind = ordered_matches[-((len(self.others) + 1) // 2)]
-        
+
         # Commit entries and cleanup index list
         self.attempt_commit(new_comm_ind)
 
     def attempt_commit(self, new_comm_ind) -> None:
         """Attempts to commit entries up to the new commit index.
-        
+
         Args:
             new_comm_ind: The new commit index to attempt to commit entries up to."""
         if self.comm_ind < new_comm_ind and self.log[new_comm_ind]["term"] == self.term:
@@ -398,28 +405,30 @@ class Replica:
 
     def notify_entries_committed(self, entries):
         """Sends notification for committed entries.
-        
+
         Args:
             entries: The entries that have been committed."""
         for entry in entries:
             if entry["term"] == self.term and entry["command"] == "put":
-                ok_entry = {"src": self.id, 
-                            "dst": entry["src"], 
-                            "leader": self.current_leader, 
-                            "type": "ok", 
-                            "term": self.term, 
+                ok_entry = {"src": self.id,
+                            "dst": entry["src"],
+                            "leader": self.current_leader,
+                            "type": "ok",
+                            "term": self.term,
                             "MID": entry["MID"]}
                 self.send(ok_entry)
 
     def handle_failed_append(self, message) -> None:
         """Handles a failed append response by adjusting indexes and retrying.
-        
+
         Args:
             message: The failed append response message."""
         if "first_index" in message:
-            self.next_ind[message["src"]] = max(message["first_index"], self.match_ind[message["src"]])
+            self.next_ind[message["src"]] = max(
+                message["first_index"], self.match_ind[message["src"]])
         else:
-            self.next_ind[message["src"]] = max(1, self.next_ind[message["src"]] - 1)
+            self.next_ind[message["src"]] = max(
+                1, self.next_ind[message["src"]] - 1)
         self.send_append_replica(message["src"])
 
     def handle_commit(self) -> None:
@@ -441,7 +450,7 @@ class Replica:
 
     def handle_get(self, message) -> None:
         """Handles get request from client.
-        
+
         Args:
             message: The get request from the client.
         """
@@ -454,45 +463,46 @@ class Replica:
 
     def respond_to_get(self, message):
         """Responds to a get request from a client when the replica is the leader.
-        
+
         Args:
             message: The get request from the client.
         """
         key = message["key"]
-        value = self.db.get(key, "")  # Default to empty string if key not found
+        # Default to empty string if key not found
+        value = self.db.get(key, "")
         ok_message = {
-            "src": self.id, 
-            "dst": message["src"], 
-            "leader": self.current_leader, 
-            "type": "ok", 
-            "term": self.term, 
-            "MID": message["MID"], 
+            "src": self.id,
+            "dst": message["src"],
+            "leader": self.current_leader,
+            "type": "ok",
+            "term": self.term,
+            "MID": message["MID"],
             "value": value
         }
         self.send(ok_message)
 
-    def handle_put(self, message) -> None: 
+    def handle_put(self, message) -> None:
         """Handles put request from client.
 
         Args:
             message: The put request from the client.
         """
         if self.state == ReplicaState.LEADER:
-                committed = self.is_committed(message)
-                
-                if not committed:
-                    entry = {"command": message["type"], 
-                             "src": message["src"], 
-                             "MID": message["MID"], 
-                             "key": message["key"], 
-                             "value": message["value"],
-                             "term": self.term}
-                    self.log.append(entry)
+            committed = self.is_committed(message)
+
+            if not committed:
+                entry = {"command": message["type"],
+                         "src": message["src"],
+                         "MID": message["MID"],
+                         "key": message["key"],
+                         "value": message["value"],
+                         "term": self.term}
+                self.log.append(entry)
         elif self.state == ReplicaState.FOLLOWER:
             self.send_redirect(message)
         elif self.state == ReplicaState.CANDIDATE:
             self.queue.append(message)
-            
+
     def is_committed(self, message) -> bool:
         """Checks if a message has been committed.
 
@@ -505,14 +515,14 @@ class Replica:
         for entry in self.log[1:self.comm_ind + 1]:
             if entry["MID"] == message["MID"]:
                 ok_message = {"src": self.id,
-                            "dst": message["dst"],
-                            "leader": self.current_leader,
-                            "type": "ok",
-                            "term": self.term,
-                            "MID": message["MID"]}
+                              "dst": message["dst"],
+                              "leader": self.current_leader,
+                              "type": "ok",
+                              "term": self.term,
+                              "MID": message["MID"]}
                 self.send(ok_message)
                 return True
-        return False   
+        return False
 
     def send_redirect(self, message) -> None:
         """Redirects client to leader.
@@ -521,12 +531,12 @@ class Replica:
             message: The message that needs to be redirected.
         """
         if self.current_leader != BROADCAST:
-            redirect_message = {"src": self.id, 
-                            "dst": message["src"], 
-                            "leader": self.current_leader, 
-                            "type": "redirect", 
-                            "term": self.term, 
-                            "MID": message["MID"]}
+            redirect_message = {"src": self.id,
+                                "dst": message["src"],
+                                "leader": self.current_leader,
+                                "type": "redirect",
+                                "term": self.term,
+                                "MID": message["MID"]}
             self.send(redirect_message)
         else:
             self.queue.append(message)
@@ -538,7 +548,7 @@ class Replica:
             message: The message to drop.
         """
         self.log_message(f"Dropping message: {message}")
-     
+
     def handle_message(self) -> None:
         """Handles incoming messages by delegating to the appropriate handler function."""
         socks = select.select([self.socket], [], [], 0.1)[0]
@@ -554,7 +564,7 @@ class Replica:
                 if "MID" in message:
                     self.queue.append(message)
                 return
-            
+
             # If term outdated, transition to follower
             if "term" in message and self.term < message["term"]:
                 self.transition_state(ReplicaState.FOLLOWER, message)
@@ -574,31 +584,31 @@ class Replica:
             elif message_type == "vote":
                 self.handle_vote(message)
             elif message_type == "append":
-                self.handle_append(message) # Same for all
+                self.handle_append(message)  # Same for all
             else:
                 self.log_message(f"Unknown message type: {message_type}")
-    
+
     def handle_ok(self, message) -> None:
         """Handles an ok message from a follower."""
         if self.state == ReplicaState.LEADER:
             self.handle_successful_append(message)
         elif self.state == ReplicaState.FOLLOWER or self.state == ReplicaState.CANDIDATE:
             self.drop_message(message)
-            
+
     def handle_fail(self, message) -> None:
         """Handles a fail message from a follower."""
         if self.state == ReplicaState.LEADER:
             self.handle_failed_append(message)
         elif self.state == ReplicaState.FOLLOWER or self.state == ReplicaState.CANDIDATE:
             self.drop_message(message)
-            
+
     def handle_vote(self, message) -> None:
         """Handles a vote message from a follower."""
         if self.state == ReplicaState.LEADER or self.state == ReplicaState.FOLLOWER:
             self.drop_message(message)
         elif self.state == ReplicaState.CANDIDATE:
             self.parse_vote(message)
-    
+
     def update_time(self):
         """Updates all time-related attributes."""
         current_time = time.time()
@@ -613,11 +623,13 @@ class Replica:
             self.handle_message()
             self.handle_commit()
 
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='run a key-value store')
     parser.add_argument('port', type=int, help="Port number to communicate")
     parser.add_argument('id', type=str, help="ID of this replica")
-    parser.add_argument('others', metavar='others', type=str, nargs='+', help="IDs of other replicas")
+    parser.add_argument('others', metavar='others', type=str,
+                        nargs='+', help="IDs of other replicas")
     args = parser.parse_args()
     replica = Replica(args.port, args.id, args.others)
     replica.run()
